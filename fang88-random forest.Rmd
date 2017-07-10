@@ -1,0 +1,281 @@
+---
+title: "f88"
+author: "HM"
+date: "7/10/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+##preprocess dataset
+#read dataset homerent.csv
+options(digits = 9)
+rt <- read.csv("containrent.csv", stringsAsFactors = FALSE)
+#apply log function on the rentPrice
+rt$logprice <- log(rt$rentzestimate_amount)
+rt$logprice
+head(rt)
+
+#find out how many missing values each feature has
+sum.na <- sort(sapply(rt, function(x) { sum(is.na(x)) }), decreasing=TRUE)
+sum.na
+
+summary(rt)
+dim(rt)
+
+
+#use mice library to impute missing value, transfer categorical variables into factor
+library(mice)
+imp.rt <- mice(rt, m=1, method='cart', printFlag=FALSE)
+rt_noNA <- complete(imp.rt)
+#confirm no NAs
+sort(sapply(rt_noNA, function(x) { sum(is.na(x)) }), decreasing=TRUE)
+#check imputing results
+table(rt$bathrooms)
+table(rt$bedrooms)
+table(rt$latitude)
+table(rt$longitude)
+table(rt$lot_sqft)
+table(rt$sqft)
+sort(sapply(rt_noNA, function(x) { sum(is.na(x)) }), decreasing=TRUE)
+#store the imputed data(no NAs)
+write.csv(rt_noNA, file = "rt_noNA.csv",row.names = FALSE)
+dim(rt_noNA)
+head(rt_noNA)
+summary(rt_noNA)
+#read the no NAs dataset 
+rt1<-read.csv("rt_noNA.csv",header=T)
+dim(rt1)
+head(rt1)
+summary(rt1)
+hist(rt1$lot_sqft)
+summary(rt1$lot_sqft)
+hist(rt1$sqft)
+#outlier removed
+rt1 <- subset(rt1, Age<400)
+dim(rt1)
+rt1 <- subset(rt1, bedrooms<=35)
+rt1 <- subset(rt1, bathrooms<=30)
+rt1 <- subset(rt1, lot_sqft<=15000000)
+rt1 <- subset(rt1, sqft<=70000)
+rt1 <- subset(rt1, rentzestimate_amount<=200000)
+rt1 <- subset(rt1, list_price<=32500000)
+summary(rt1)
+
+#since some features are removed because of too many missing values, compair train_complete with train and find out the removed ones
+catg_feature <- c("state","property_type","city")
+catg_feature
+all_name<-names(rt1)
+all_name
+#set categorical features as factor to get dummy for categorical features.
+rt1[catg_feature] <- lapply(rt1[catg_feature], as.factor)
+head(rt1)
+numrt <- subset(rt1, select = -c(city, state, property_type,rentzestimate_amount, logprice))
+categ <- subset(rt1, select = c(property_type,rentzestimate_amount, logprice))
+View(numrt)
+View(categ)
+scalenumrt <- scale(numrt, center = TRUE, scale = TRUE)
+View(scalenumrt)
+rt2 <- scalenumrt
+rt2 <- cbind(scalenumrt, categ)
+View(rt2)
+summary(rt2)
+write.csv(rt2, file = "rent_normlized_outlier_removed.csv",row.names = FALSE)
+
+#set 70% training, 30% testing 
+rt2<-read.csv("rent_normlized_outlier_removed.csv",stringsAsFactors = FALSE)
+summary(rt2)
+
+set.seed(1)
+rt2.ind <- sample(1:dim(rt2)[1], dim(rt2)[1] * 0.7)
+train.data <- rt2[rt2.ind, ]
+#View(train.data)
+write.csv(train.data, file = "f88_train.csv",row.names = FALSE)
+test.data <- rt2[-rt2.ind, ]
+View(test.data)
+write.csv(test.data, file = "f88_test.csv",row.names = FALSE)
+dim(train.data)
+dim(test.data)
+
+##random forest
+library(randomForest)
+set.seed(2)
+rf.formula <- paste("logprice ~ .")
+rf.formula
+# Change all the categorical features to factor
+for(i in 1:dim(rt2)[2]) {
+  if(is.character(rt2[, i])) {
+    rt2[, i] <- as.factor(rt2[, i])
+  }
+}
+train.data <- rt2[rt2.ind, ]
+test.data <- rt2[-rt2.ind, ]
+#apply random forest, tree = 200
+rf <- randomForest(as.formula(rf.formula), data = train.data, importance = TRUE, ntree = 200)
+rf
+#check out the first tree
+getTree(rf, k = 1, labelVar = TRUE) 
+#check rf, incresed more, more important
+varImpPlot(rf)
+#get the order of the importance
+importanceOrder= order(-rf$importance[, "%IncMSE"])
+names = rownames(rf$importance)[importanceOrder]
+names
+for (name in names[1:9]) {
+  partialPlot(rf, train.data, eval(name), main=name, xlab=name)
+}
+#check OOB error, when tree # is around 200, the rf almost remains same
+plot(rf) 
+#predict test data
+test.pred <- predict(rf, test.data) 
+pred <- cbind(test.data, test.pred)
+View(pred)
+predited_price <- exp(test.data$logprice)
+pred_test <- cbind(pred, predited_price)
+View(pred_test)
+write.csv(pred_test, file = "rent_normlized_outlier_removed_test_pred.csv",row.names = FALSE)
+table(pred_test)
+# write train dataset prediction into csv
+train.pred <- predict(rf, train.data)
+trainpred <- cbind(train.data,train.pred)
+predited_rent <- exp(train.data$logprice)
+pred_train <- cbind(trainpred, predited_rent)
+View(pred_train)
+write.csv(pred_train, file = "rent_normlized_outlier_removed_train_pred.csv",row.names = FALSE)
+
+rtno_noNA2 <- read.csv("norentnoNA_normlized_outlier_removed_1.csv",stringsAsFactors = FALSE)
+sapply(rtno_noNA2, class)
+View(rtno_noNA2)
+for(i in 1:dim(rtno_noNA2)[2]) {
+  if(is.character(rtno_noNA2[, i])) {
+    rtno_noNA2[, i] <- as.factor(rtno_noNA2[, i])
+  }
+}
+dim(rtno_noNA2)
+#rtno_noNA2 <- rbind(train.data[1, ] , rtno_noNA2)
+#rtno_noNA2 <- rtno_noNA2[-1,]
+common <- intersect(names(train.data), names(rtno_noNA2)) 
+for (p in common) { 
+  if (class(train.data[[p]]) == "factor") { 
+    levels(rtno_noNA2[[p]]) <- levels(train.data[[p]]) 
+  } 
+}
+sapply(rtno_noNA2, class)
+sapply(train.data, class)
+sapply(rtno_noNA2, mode)
+sapply(train.data, mode)
+levels(rtno_noNA2$variableName) <- levels(train.data$variableName)
+summary(train.data)
+#rtno_noNA2$logprice<-0
+summary(rtno_noNA2)
+test.data<-rtno_noNA2
+for(i in 1:dim(train.data)[2]) {
+  if(is.character(train.data[, i]) & 
+     length(which(!unique(test.data[, i]) %in% unique(train.data[, i]))) > 0) {
+    print(paste("this column: ", colnames(train.data)[i], "has new levels in test"))
+  } 
+}
+pred.rent<-predict(rf, rtno_noNA2)
+
+#train dataset mae rmse
+library(Metrics)
+#MAE 0.04628411
+mae <- mae(train.data$logprice, train.pred)
+mae
+#MSE
+mse <- mse(train.data$logprice, train.pred)
+mse
+#RMSE 0.08662417
+rmse <- sqrt(mse)
+rmse
+
+
+#test dataset mae rmse
+#MAE 0.1023229
+mae <- mae(test.data$logprice, test.pred)
+mae
+#MSE
+mse <- mse(test.data$logprice, test.pred)
+mse
+#RMSE 0.1857701
+rmse <- sqrt(mse)
+rmse
+rf
+
+# dataset without rent
+rtno<-read.csv("norent1.csv",stringsAsFactors = FALSE)
+dim(rtno)
+head(rtno)
+View(rtno)
+rtno <- subset(rtno, Age<400 & Age>=0)
+dim(rtno)
+#find out how many missing values each feature has
+sum.na <- sort(sapply(rtno, function(x) { sum(is.na(x)) }), decreasing=TRUE)
+sum.na
+rtno$logprice<-NA
+summary(rtno)
+dim(rtno)
+
+library(mice)
+imp.rt <- mice(rtno, m=1, method='cart', printFlag=FALSE)
+rtno_noNA <- complete(imp.rt)
+#confirm no NAs
+sort(sapply(rtno_noNA, function(x) { sum(is.na(x)) }), decreasing=TRUE)
+#check imputing results
+table(rtno$bathrooms)
+table(rtno$bedrooms)
+table(rtno$latitude)
+table(rtno$longitude)
+table(rtno$lot_sqft)
+table(rtno$sqft)
+sort(sapply(rtno_noNA, function(x) { sum(is.na(x)) }), decreasing=TRUE)
+#store the imputed data(no NAs)
+write.csv(rtno_noNA, file = "rtnorent_noNA.csv",row.names = FALSE)
+dim(rtno_noNA)
+head(rtno_noNA)
+summary(rtno_noNA)
+
+rtno_noNA<-read.csv("rtnorent_noNA.csv",header=T)
+dim(rtno_noNA)
+head(rtno_noNA)
+summary(rtno_noNA)
+hist(rtno_noNA$lot_sqft)
+summary(rtno_noNA$lot_sqft)
+hist(rtno_noNA1$sqft)
+#outlier removed
+dim(rtno_noNA)
+rtno_noNA <- subset(rtno_noNA, bedrooms<=35)
+rtno_noNA <- subset(rtno_noNA, bathrooms<=30)
+rtno_noNA <- subset(rtno_noNA, lot_sqft<=15000000)
+rtno_noNA <- subset(rtno_noNA, sqft<=70000)
+rtno_noNA <- subset(rtno_noNA, list_price<=32500000)
+summary(rtno_noNA)
+View(rtno_noNA)
+#standarlize
+catg_feature <- c("state","property_type","city")
+catg_feature
+all_name<-names(rtno_noNA)
+all_name
+#set categorical features as factor to get dummy for categorical features.
+rtno_noNA[catg_feature] <- lapply(rtno_noNA[catg_feature], as.factor)
+head(rtno_noNA)
+numrt <- subset(rtno_noNA, select = -c(city, state, property_type))
+categ <- subset(rtno_noNA, select = c(property_type))
+View(numrt)
+View(categ)
+scalenumrt <- scale(numrt, center = TRUE, scale = TRUE)
+View(scalenumrt)
+rtno_noNA2 <- scalenumrt
+#View(rt2)
+#typeof(rt2)
+#summary(rt2)
+rtno_noNA2 <- cbind(scalenumrt, categ)
+View(rtno_noNA2)
+summary(rtno_noNA2)
+write.csv(rtno_noNA2, file = "norentnoNA_normlized_outlier_removed.csv",row.names = FALSE)
+```
+
